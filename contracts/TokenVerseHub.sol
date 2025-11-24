@@ -1,13 +1,4 @@
-// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
-
-/**
- * @title TokenVerse Hub
- * @dev A comprehensive hub for managing multiple tokens, staking, and rewards
- */
-contract TokenVerseHub {
-    
-    // Structs
+Structs
     struct Token {
         string name;
         string symbol;
@@ -22,25 +13,14 @@ contract TokenVerseHub {
         uint256 rewardDebt;
     }
     
-    // State variables
-    address public owner;
-    uint256 public tokenCount;
-    uint256 public rewardRate = 100; // Rewards per second per token staked
+    Rewards per second per token staked
     
     mapping(uint256 => Token) public tokens;
     mapping(uint256 => mapping(address => uint256)) public balances;
     mapping(uint256 => mapping(address => StakeInfo)) public stakes;
     mapping(address => bool) public verifiedCreators;
     
-    // Events
-    event TokenCreated(uint256 indexed tokenId, string name, string symbol, address creator);
-    event TokenTransferred(uint256 indexed tokenId, address from, address to, uint256 amount);
-    event TokenStaked(uint256 indexed tokenId, address user, uint256 amount);
-    event TokenUnstaked(uint256 indexed tokenId, address user, uint256 amount);
-    event RewardsClaimed(uint256 indexed tokenId, address user, uint256 reward);
-    event CreatorVerified(address creator);
-    
-    // Modifiers
+    Modifiers
     modifier onlyOwner() {
         require(msg.sender == owner, "Not authorized");
         _;
@@ -106,25 +86,7 @@ contract TokenVerseHub {
         require(_amount > 0, "Amount must be greater than 0");
         require(balances[_tokenId][msg.sender] >= _amount, "Insufficient balance");
         
-        // Claim pending rewards first
-        if (stakes[_tokenId][msg.sender].amount > 0) {
-            claimRewards(_tokenId);
-        }
-        
-        balances[_tokenId][msg.sender] -= _amount;
-        stakes[_tokenId][msg.sender].amount += _amount;
-        stakes[_tokenId][msg.sender].timestamp = block.timestamp;
-        
-        emit TokenStaked(_tokenId, msg.sender, _amount);
-    }
-    
-    /**
-     * @dev Function 4: Unstake tokens
-     */
-    function unstakeTokens(uint256 _tokenId, uint256 _amount) public tokenExists(_tokenId) {
-        require(stakes[_tokenId][msg.sender].amount >= _amount, "Insufficient staked amount");
-        
-        // Claim pending rewards first
+        Claim pending rewards first
         claimRewards(_tokenId);
         
         stakes[_tokenId][msg.sender].amount -= _amount;
@@ -210,3 +172,6 @@ contract TokenVerseHub {
         return (token.name, token.symbol, token.totalSupply, token.creator, token.isActive);
     }
 }
+// 
+End
+// 
