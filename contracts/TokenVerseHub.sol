@@ -1,113 +1,143 @@
---------------------------------------------------
-    --------------------------------------------------
-    struct TokenInfo {
-        bool registered;
-        string name;
-        string symbol;
-        uint8 decimals;
-    }
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.26;
 
-    struct Channel {
-        uint256 id;
-        string label;
-        address[] tokens;        tokens per block
-        mapping(address => uint256) balance;
-        mapping(address => uint256) rewardDebt;
-        uint256 accRewardPerShare;
-        uint256 lastRewardBlock;
+/**
+ * @title TokenVerse Hub
+ * @notice A decentralized multi-token hub that allows registration of ERC-20 tokens,
+ *         token-to-token swapping, and liquidity pooling inside a unified protocol.
+ */
+
+interface IERC20 {
+    function transfer(address to, uint256 value) external returns (bool);
+    function transferFrom(address from, address to, uint256 value) external returns (bool);
+    function balanceOf(address user) external view returns (uint256);
+}
+
+contract TokenVerseHub {
+    address public owner;
+    uint256 public constant SWAP_FEE = 2; // 2% fee on swaps
+
+    struct LiquidityPool {
+        address tokenA;
+        address tokenB;
+        uint256 reserveA;
+        uint256 reserveB;
         bool exists;
     }
 
-    address public owner;
-
-    uint256 public channelCount;
+    // poolId => LiquidityPool
+    mapping(uint256 => LiquidityPool) public pools;
     uint256 public poolCount;
 
-    mapping(address => TokenInfo) public tokenRegistry;
-    mapping(uint256 => Channel) public channels;
-    mapping(uint256 => StakingPool) public pools;
+    event PoolCreated(uint256 indexed poolId, address tokenA, address tokenB);
+    event LiquidityAdded(uint256 indexed poolId, uint256 amountA, uint256 amountB);
+    event LiquidityRemoved(uint256 indexed poolId, uint256 amountA, uint256 amountB);
+    event TokenSwapped(
+        uint256 indexed poolId,
+        address indexed user,
+        address inputToken,
+        address outputToken,
+        uint256 inputAmount,
+        uint256 outputAmount
+    );
 
-    EVENTS
-    --------------------------------------------------
-    --------------------------------------------------
     modifier onlyOwner() {
-        require(msg.sender == owner, "Not owner");
+        require(msg.sender == owner, "Owner restricted");
         _;
     }
 
-    modifier validPool(uint256 pid) {
-        require(pools[pid].exists, "Pool not found");
-        _;
+    constructor() {
+        owner = msg.sender;
     }
 
-    CONSTRUCTOR
-    --------------------------------------------------
-    --------------------------------------------------
-    function registerToken(
-        address token,
-        string memory name,
-        string memory symbol,
-        uint8 decimals
-    ) external onlyOwner {
-        tokenRegistry[token] = TokenInfo(true, name, symbol, decimals);
-        emit TokenRegistered(token, name, symbol);
+    /**
+     * @notice Create a liquidity pool between two tokens
+     */
+    function createPool(address tokenA, address tokenB) external onlyOwner returns (uint256) {
+        require(tokenA != tokenB, "Same token not allowed");
+
+        poolCount++;
+        pools[poolCount] = LiquidityPool(tokenA, tokenB, 0, 0, true);
+
+        emit PoolCreated(poolCount, tokenA, tokenB);
+        return poolCount;
     }
 
-    function isTokenRegistered(address token) external view returns (bool) {
-        return tokenRegistry[token].registered;
+    /**
+     * @notice Add liquidity to a pool
+     */
+    function addLiquidity(uint256 poolId, uint256 amountA, uint256 amountB) external {
+        LiquidityPool storage pool = pools[poolId];
+        require(pool.exists, "Pool not found");
+
+        IERC20(pool.tokenA).transferFrom(msg.sender, address(this), amountA);
+        IERC20(pool.tokenB).transferFrom(msg.sender, address(this), amountB);
+
+        pool.reserveA += amountA;
+        pool.reserveB += amountB;
+
+        emit LiquidityAdded(poolId, amountA, amountB);
     }
 
-    CHANNEL MANAGEMENT
-    --------------------------------------------------
-    --------------------------------------------------
-    function swap(
-        address tokenIn,
-        address tokenOut,
-        uint256 amountIn
-    ) external returns (uint256 amountOut) {
-        require(tokenRegistry[tokenIn].registered, "TokenIn not registered");
-        require(tokenRegistry[tokenOut].registered, "TokenOut not registered");
+    /**
+     * @notice Remove liquidity from a pool
+     */
+    function removeLiquidity(uint256 poolId, uint256 amountA, uint256 amountB) external onlyOwner {
+        LiquidityPool storage pool = pools[poolId];
+        require(pool.exists, "Pool not found");
+        require(pool.reserveA >= amountA && pool.reserveB >= amountB, "Insufficient reserves");
+
+        pool.reserveA -= amountA;
+        pool.reserveB -= amountB;
+
+        IERC20(pool.tokenA).transfer(msg.sender, amountA);
+        IERC20(pool.tokenB).transfer(msg.sender, amountB);
+
+        emit LiquidityRemoved(poolId, amountA, amountB);
+    }
+
+    /**
+     * @notice Swap tokenA for tokenB or vice-versa
+     */
+    function swap(uint256 poolId, address tokenIn, uint256 amountIn) external {
+        LiquidityPool storage pool = pools[poolId];
+        require(pool.exists, "Pool not found");
+        require(amountIn > 0, "Zero input");
+
+        bool isAToB = tokenIn == pool.tokenA;
+        require(isAToB || tokenIn == pool.tokenB, "Invalid token input");
+
+        address tokenOut = isAToB ? pool.tokenB : pool.tokenA;
+        uint256 reserveIn = isAToB ? pool.reserveA : pool.reserveB;
+        uint256 reserveOut = isAToB ? pool.reserveB : pool.reserveA;
 
         IERC20(tokenIn).transferFrom(msg.sender, address(this), amountIn);
+        reserveIn += amountIn;
 
-        tokenOut amount = 99% of tokenIn for demonstration
-        amountOut = (amountIn * 9900) / 10000;
+        // Apply 2% fee
+        uint256 amountAfterFee = amountIn - (amountIn * SWAP_FEE / 100);
+
+        // XYK formula: output = (reserveOut * amountAfterFee) / (reserveIn + amountAfterFee)
+        uint256 amountOut = (reserveOut * amountAfterFee) / (reserveIn + amountAfterFee);
+        require(amountOut > 0, "Insufficient output");
+
+        // Update reserves
+        reserveOut -= amountOut;
+
+        if (isAToB) {
+            pool.reserveA = reserveIn;
+            pool.reserveB = reserveOut;
+        } else {
+            pool.reserveB = reserveIn;
+            pool.reserveA = reserveOut;
+        }
 
         IERC20(tokenOut).transfer(msg.sender, amountOut);
 
-        emit SwapExecuted(tokenIn, tokenOut, amountIn, amountOut);
+        emit TokenSwapped(poolId, msg.sender, tokenIn, tokenOut, amountIn, amountOut);
     }
 
-    STAKING POOL
-    STAKE
-    function stake(uint256 pid, uint256 amount) external validPool(pid) {
-        StakingPool storage p = pools[pid];
-        _updatePool(p);
-
-        if (p.balance[msg.sender] > 0) {
-            uint256 pending =
-                (p.balance[msg.sender] * p.accRewardPerShare / 1e12)
-                - p.rewardDebt[msg.sender];
-            IERC20(p.token).transfer(msg.sender, pending);
-            emit RewardClaimed(pid, msg.sender, pending);
-        }
-
-        IERC20(p.token).transferFrom(msg.sender, address(this), amount);
-
-        p.balance[msg.sender] += amount;
-        p.totalStaked += amount;
-        p.rewardDebt[msg.sender] =
-            p.balance[msg.sender] * p.accRewardPerShare / 1e12;
-
-        emit Staked(pid, msg.sender, amount);
-    }
-
-    --------------------------------------------------
-    --------------------------------------------------
-    function transferOwnership(address newOwner) external onlyOwner {
-        owner = newOwner;
+    function getPool(uint256 poolId) external view returns (LiquidityPool memory) {
+        return pools[poolId];
     }
 }
-// 
-Contract End
-// 
